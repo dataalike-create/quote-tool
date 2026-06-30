@@ -662,8 +662,8 @@ async function buildPdfDoc(){
   function tr(l,v,bold){doc.setFont('helvetica',bold?'bold':'normal');doc.setFontSize(bold?12:10);doc.setTextColor(bold?main[0]:70,bold?main[1]:70,bold?main[2]:70);doc.text(l,128,yy);doc.text(v,mR,yy,{align:'right'});yy+=bold?8:6;}
   tr('Labour',gbp.format(lt));tr('Materials',gbp.format(mt));tr('Subtotal',gbp.format(lt+mt));
   if(cisV){doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(180,40,40);doc.text('Less CIS ('+rate+'%)',128,yy);doc.text('-'+gbp.format(cis),mR,yy,{align:'right'});yy+=6;}
-  doc.setDrawColor(main[0],main[1],main[2]);doc.setLineWidth(0.4);doc.line(128,yy-2,mR,yy-2);
-  tr('Total due',gbp.format(total),true);yy+=5;
+  var lineY=yy-3;doc.setDrawColor(main[0],main[1],main[2]);doc.setLineWidth(0.4);doc.line(128,lineY,mR,lineY);yy=lineY+6;
+  tr('Total due',gbp.format(total),true);yy+=2;
 
   var pay=payTextLines();
   if(pay.length){
