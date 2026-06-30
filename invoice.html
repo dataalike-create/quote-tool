@@ -130,7 +130,8 @@
   .doc-pay .blocklabel{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#888;margin-bottom:6px;}
   .doc-pay .pl{color:#888;font-weight:600;}
 </style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 </head>
 <body>
 
@@ -604,8 +605,88 @@ function buildDoc(){
   if(invNo.value===fmtNo(parseInt(localStorage.getItem(CKEY)||'0',10)+1)){nextCounter(false);}
   return true;
 }
-function pdfOpts(){return {margin:[10,10,10,10],filename:lastFilename+'.pdf',image:{type:'jpeg',quality:0.98},html2canvas:{scale:2,backgroundColor:'#ffffff',useCORS:true},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}};}
-function makePdfBlob(){return html2pdf().set(pdfOpts()).from(document.querySelector('#print-root .doc')).outputPdf('blob');}
+function hexToRgb(h){h=(h||'#000000').replace('#','');if(h.length===3)h=h.split('').map(function(x){return x+x;}).join('');var n=parseInt(h,16)||0;return [(n>>16)&255,(n>>8)&255,n&255];}
+function imgDims(src){return new Promise(function(res,rej){var i=new Image();i.onload=function(){res({w:i.naturalWidth,h:i.naturalHeight});};i.onerror=rej;i.src=src;});}
+async function buildPdfDoc(){
+  var s=loadSettings();
+  if(!s.name){ if(confirm('Add your business name first so it shows on the invoice. Go to Setup now?')) showTab('setup'); return null; }
+  var labour=[],materials=[],lt=0,mt=0,any=false;
+  document.querySelectorAll('#labourItems .item').forEach(function(it){var ins=it.querySelectorAll('input');var d=ins[0].value.trim();var q=parseFloat(ins[1].value)||0;var p=parseFloat(ins[2].value)||0;if(!d&&!q&&!p)return;any=true;lt+=q*p;labour.push([d,q?String(q):'',gbp.format(p),gbp.format(q*p)]);});
+  document.querySelectorAll('#materialItems .item').forEach(function(it){var ins=it.querySelectorAll('input');var d=ins[0].value.trim();var q=parseFloat(ins[1].value)||0;var p=parseFloat(ins[2].value)||0;if(!d&&!q&&!p)return;any=true;mt+=q*p;materials.push([d,q?String(q):'',gbp.format(p),gbp.format(q*p)]);});
+  if(!any){ alert('Add at least one line first.'); return null; }
+  var cisV=cisOn_el().checked, rate=parseFloat(document.getElementById('cisRate').value)||0;
+  var cis=cisV?lt*rate/100:0, total=lt+mt-cis;
+  var c=custData();
+  var no=invNo.value||fmtNo(nextCounter(true));
+  var dStr=invDate.value?new Date(invDate.value+'T00:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'}):'';
+  var dueStr=invDue.value?new Date(invDue.value+'T00:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'}):'';
+
+  var JS=window.jspdf.jsPDF, doc=new JS({unit:'mm',format:'a4'});
+  var main=hexToRgb(s.main||'#1f2937'), accent=hexToRgb(s.accent||'#2563eb');
+  var mL=14, mR=196, y=16, logoH=0;
+
+  if(s.logo){ try{ var dm=await imgDims(s.logo); var lw=34, lh=lw*dm.h/dm.w; if(lh>20){lh=20;lw=lh*dm.w/dm.h;} doc.addImage(s.logo,'PNG',mL,y,lw,lh); logoH=lh; }catch(e){} }
+  var bizY=y+(logoH?logoH+7:7);
+  doc.setFont('helvetica','bold');doc.setFontSize(18);doc.setTextColor(main[0],main[1],main[2]);
+  doc.text(s.name,mL,bizY);
+  doc.setFontSize(18);doc.setTextColor(accent[0],accent[1],accent[2]);
+  doc.text('INVOICE',mR,y+5,{align:'right'});
+  doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(90);
+  doc.text(no,mR,y+11,{align:'right'});
+  if(dStr)doc.text(dStr,mR,y+16,{align:'right'});
+  if(dueStr)doc.text('Due: '+dueStr,mR,y+21,{align:'right'});
+
+  var divY=Math.max(bizY,y+(dueStr?23:16))+3;
+  doc.setDrawColor(main[0],main[1],main[2]);doc.setLineWidth(0.8);doc.line(mL,divY,mR,divY);
+  var yy=divY+8;
+
+  var addrLines=custAddrLines(c);
+  if(c.name||addrLines.length||c.email){
+    doc.setFontSize(8);doc.setTextColor(150);doc.text('INVOICE TO',mL,yy);yy+=5;doc.setTextColor(50);
+    if(c.name){doc.setFont('helvetica','bold');doc.setFontSize(11);doc.text(c.name,mL,yy);doc.setFont('helvetica','normal');yy+=5;}
+    doc.setFontSize(10);addrLines.forEach(function(l){doc.text(l,mL,yy);yy+=5;});
+    if(c.email){doc.text(c.email,mL,yy);yy+=5;}
+    yy+=3;
+  }
+
+  function drawTable(title,rows){
+    doc.setFont('helvetica','bold');doc.setFontSize(9);doc.setTextColor(main[0],main[1],main[2]);doc.text(title.toUpperCase(),mL,yy);
+    doc.autoTable({startY:yy+1.5,margin:{left:mL,right:14},head:[['Description','Qty','Unit price','Total']],body:rows,theme:'grid',
+      styles:{fontSize:9,cellPadding:2},headStyles:{fillColor:main,textColor:255},
+      columnStyles:{1:{halign:'right',cellWidth:16},2:{halign:'right',cellWidth:28},3:{halign:'right',cellWidth:28}}});
+    yy=doc.lastAutoTable.finalY+6;
+  }
+  if(labour.length)drawTable('Labour',labour);
+  if(materials.length)drawTable('Materials & expenses',materials);
+
+  function tr(l,v,bold){doc.setFont('helvetica',bold?'bold':'normal');doc.setFontSize(bold?12:10);doc.setTextColor(bold?main[0]:70,bold?main[1]:70,bold?main[2]:70);doc.text(l,128,yy);doc.text(v,mR,yy,{align:'right'});yy+=bold?8:6;}
+  tr('Labour',gbp.format(lt));tr('Materials',gbp.format(mt));tr('Subtotal',gbp.format(lt+mt));
+  if(cisV){doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(180,40,40);doc.text('Less CIS ('+rate+'%)',128,yy);doc.text('-'+gbp.format(cis),mR,yy,{align:'right'});yy+=6;}
+  doc.setDrawColor(main[0],main[1],main[2]);doc.setLineWidth(0.4);doc.line(128,yy-2,mR,yy-2);
+  tr('Total due',gbp.format(total),true);yy+=5;
+
+  var pay=payTextLines();
+  if(pay.length){
+    var bh=11+pay.length*5;
+    doc.setFillColor(247,248,250);doc.setDrawColor(229,231,235);doc.setLineWidth(0.3);doc.roundedRect(mL,yy,mR-mL,bh,2,2,'FD');
+    doc.setFontSize(8);doc.setTextColor(150);doc.text('HOW TO PAY',mL+4,yy+6);
+    doc.setFontSize(10);var py=yy+12;
+    pay.forEach(function(line){var m=line.match(/^Pay online: (.+)$/);if(m){doc.setTextColor(accent[0],accent[1],accent[2]);doc.textWithLink(line,mL+4,py,{url:m[1]});}else{doc.setTextColor(60);doc.text(line,mL+4,py);}py+=5;});
+    yy+=bh+6;
+  }
+
+  var notesV=notes.value.trim();
+  if(notesV){doc.setFontSize(8);doc.setTextColor(150);doc.text('NOTES',mL,yy);yy+=5;doc.setFontSize(10);doc.setTextColor(60);var nl=doc.splitTextToSize(notesV,mR-mL);doc.text(nl,mL,yy);}
+
+  var contact=[];if(s.phone)contact.push(s.phone);if(s.email)contact.push(s.email);
+  doc.setFontSize(9);doc.setTextColor(110);
+  if(contact.length)doc.text(contact.join('     '),105,286,{align:'center'});
+  if(s.slogan){doc.setFont('helvetica','italic');doc.setTextColor(accent[0],accent[1],accent[2]);doc.text(s.slogan,105,291,{align:'center'});}
+
+  lastFilename=('Invoice '+no+(c.name?' - '+c.name:'')).replace(/[\\\/:*?"<>|]/g,'').trim();
+  if(invNo.value===fmtNo(parseInt(localStorage.getItem(CKEY)||'0',10)+1))nextCounter(false);
+  return doc;
+}
 function openPreview(){
   if(!buildDoc()) return;
   document.getElementById('preview-body').innerHTML=document.getElementById('print-root').innerHTML;
@@ -615,7 +696,7 @@ function openPreview(){
 function closePreview(){document.getElementById('preview-overlay').classList.add('hidden');}
 function scalePreview(){var ov=document.getElementById('preview-overlay');if(ov.classList.contains('hidden'))return;var sc=ov.querySelector('.pv-scroll');document.getElementById('preview-stage').style.zoom=Math.min(1,(sc.clientWidth-28)/760);}
 window.addEventListener('resize',scalePreview);
-function downloadPdf(){if(!buildDoc())return;html2pdf().set(pdfOpts()).from(document.querySelector('#print-root .doc')).save();}
+async function downloadPdf(){var d=await buildPdfDoc(); if(d) d.save(lastFilename+'.pdf');}
 function shareText(){
   var s=loadSettings(), c=custData(), t=computeTotals();
   var due=invDue.value?new Date(invDue.value+'T00:00:00').toLocaleDateString('en-GB'):'';
@@ -623,16 +704,15 @@ function shareText(){
   if(s.payLink) msg+='\nPay online: '+s.payLink;
   return msg;
 }
-function sharePdf(){
-  if(!buildDoc())return;
-  makePdfBlob().then(function(blob){
-    var file=new File([blob],lastFilename+'.pdf',{type:'application/pdf'});
-    var withText={files:[file],title:lastFilename,text:shareText()};
-    if(navigator.canShare&&navigator.canShare(withText)){navigator.share(withText).catch(function(){});}
-    else if(navigator.canShare&&navigator.canShare({files:[file]})){navigator.share({files:[file],title:lastFilename}).catch(function(){});}
-    else{var url=URL.createObjectURL(blob);var a=document.createElement('a');a.href=url;a.download=lastFilename+'.pdf';a.click();setTimeout(function(){URL.revokeObjectURL(url);},1000);
-      alert('On a phone, Share sends the PDF with a message and your pay link. This device does not support that, so the PDF has downloaded instead.');}
-  });
+async function sharePdf(){
+  var d=await buildPdfDoc(); if(!d) return;
+  var blob=d.output('blob');
+  var file=new File([blob],lastFilename+'.pdf',{type:'application/pdf'});
+  var withText={files:[file],title:lastFilename,text:shareText()};
+  if(navigator.canShare&&navigator.canShare(withText)){navigator.share(withText).catch(function(){});}
+  else if(navigator.canShare&&navigator.canShare({files:[file]})){navigator.share({files:[file],title:lastFilename}).catch(function(){});}
+  else{var url=URL.createObjectURL(blob);var a=document.createElement('a');a.href=url;a.download=lastFilename+'.pdf';a.click();setTimeout(function(){URL.revokeObjectURL(url);},1000);
+    alert('On a phone, Share sends the PDF with a message and your pay link. This device does not support that, so the PDF has downloaded instead.');}
 }
 
 /* ---------- wiring ---------- */
